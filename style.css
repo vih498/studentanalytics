@@ -1,0 +1,57 @@
+/* Container geral dos cards */
+.cards-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+    gap: 20px;
+    padding: 20px;
+    background-color: #f9f9f9;
+}
+
+/* Card individual */
+.card {
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    padding: 20px;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+}
+
+/* Títulos dentro dos cards */
+.card h3 {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-size: 1.3rem;
+    color: #333333;
+    margin-bottom: 15px;
+}
+
+/* Parágrafos */
+.card p {
+    font-size: 1rem;
+    color: #555555;
+}
+
+/* Canvas (gráficos) */
+canvas {
+    max-width: 100%;
+    height: auto !important;
+}
+
+/* Cabeçalho do dashboard */
+h2 {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: #2c3e50;
+    margin: 20px 0;
+    text-align: center;
+}
+
+/* Ajustes gerais de responsividade */
+@media (max-width: 768px) {
+    .cards-container {
+        grid-template-columns: 1fr;
+    }
+}
