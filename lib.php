@@ -1,6 +1,10 @@
 <?php
 defined('MOODLE_INTERNAL') || die();
 
+/* ============================================================
+   FUNÇÕES ORIGINAIS (MANTIDAS)
+   ============================================================ */
+
 /**
  * Retorna os 10 alunos mais ativos com base na contagem de acessos.
  */
@@ -24,7 +28,6 @@ function local_studentanalytics_get_access_counts() {
 function local_studentanalytics_get_average_access_time() {
     global $DB;
 
-    // Obtém logs da última semana
     $oneweekago = time() - (7 * 24 * 60 * 60);
     $logs = $DB->get_records_select('logstore_standard_log', 'timecreated > ?', [$oneweekago]);
 
@@ -32,7 +35,6 @@ function local_studentanalytics_get_average_access_time() {
         return 0;
     }
 
-    // Agrupa os tempos por usuário
     $times = [];
     foreach ($logs as $log) {
         $userid = $log->userid;
@@ -40,7 +42,6 @@ function local_studentanalytics_get_average_access_time() {
             $times[$userid] = ['last' => $log->timecreated, 'total' => 0];
         } else {
             $diff = $log->timecreated - $times[$userid]['last'];
-            // Ignora intervalos maiores que 30 minutos (usuário provavelmente ausente)
             if ($diff < 1800) {
                 $times[$userid]['total'] += $diff;
             }
@@ -48,7 +49,6 @@ function local_studentanalytics_get_average_access_time() {
         }
     }
 
-    // Calcula média geral em minutos
     $totaltime = 0;
     $count = 0;
     foreach ($times as $data) {
@@ -58,10 +58,11 @@ function local_studentanalytics_get_average_access_time() {
         }
     }
 
-    return $count > 0 ? round(($totaltime / $count) / 60, 1) : 0; // Retorna em minutos
+    return $count > 0 ? round(($totaltime / $count) / 60, 1) : 0;
 }
+
 /**
- * Retorna a participação dos alunos em fóruns (número de posts) na última semana.
+ * Retorna a participação dos alunos em fóruns.
  */
 function local_studentanalytics_get_forum_participation() {
     global $DB;
@@ -80,7 +81,7 @@ function local_studentanalytics_get_forum_participation() {
 }
 
 /**
- * Retorna a quantidade de atividades entregues por aluno na última semana.
+ * Retorna submissões da última semana.
  */
 function local_studentanalytics_get_submission_counts() {
     global $DB;
@@ -98,18 +99,152 @@ function local_studentanalytics_get_submission_counts() {
     return $DB->get_records_sql($sql, [$oneweekago]);
 }
 
+/**
+ * Alerta de baixo engajamento.
+ */
 function local_studentanalytics_low_engagement_alerts($threshold = 5, $grade_limit = 50) {
-    global $DB;
     $alerts = [];
+    $students = local_studentanalytics_get_access_counts();
 
-    $topstudents = local_studentanalytics_get_access_counts();
-    $grades = local_studentanalytics_get_grades();
-
-    foreach ($topstudents as $student) {
-        $avggrade = $grades[$student->id]->avggrade ?? 0;
-        if ($student->accesscount < $threshold || $avggrade < $grade_limit) {
+    foreach ($students as $student) {
+        if ($student->accesscount < $threshold) {
             $alerts[] = $student->firstname . ' ' . $student->lastname;
         }
     }
+
     return $alerts;
+}
+
+
+
+/* ============================================================
+   FUNÇÕES DA TABELA PRÓPRIA (OPÇÃO B)
+   ============================================================ */
+
+/**
+ * Salva métricas na tabela studentanalytics.
+ */
+function local_studentanalytics_save_metrics($userid, $access, $posts, $subs, $avggrade) {
+    global $DB;
+
+    $record = new stdClass();
+    $record->userid = $userid;
+    $record->total_access = $access;
+    $record->forum_posts = $posts;
+    $record->assignments_submitted = $subs;
+    $record->average_grade = $avggrade;
+    $record->timemodified = time();
+
+    if ($existing = $DB->get_record('studentanalytics', ['userid' => $userid])) {
+        $record->id = $existing->id;
+        $DB->update_record('studentanalytics', $record);
+    } else {
+        $DB->insert_record('studentanalytics', $record);
+    }
+}
+
+/**
+ * Retorna dados reais da tabela studentanalytics.
+ */
+function local_studentanalytics_get_all_metrics() {
+    global $DB;
+
+    $sql = "
+        SELECT sa.*, u.firstname, u.lastname
+        FROM {studentanalytics} sa
+        JOIN {user} u ON u.id = sa.userid
+        ORDER BY sa.total_access DESC
+    ";
+
+    return $DB->get_records_sql($sql);
+}
+
+/**
+ * Coleta dados reais do Moodle.
+ */
+function local_studentanalytics_collect_data_for_user($userid) {
+    global $DB;
+
+    $access = $DB->count_records('logstore_standard_log', ['userid' => $userid]);
+    $posts = $DB->count_records('forum_posts', ['userid' => $userid]);
+    $subs = $DB->count_records('assign_submission', ['userid' => $userid]);
+
+    $avg = $DB->get_field_sql("
+        SELECT AVG(finalgrade)
+        FROM {grade_grades}
+        WHERE userid = ?
+    ", [$userid]);
+
+    return [$access, $posts, $subs, $avg ?? 0];
+}
+
+/**
+ * Processa todos os alunos reais.
+ */
+function local_studentanalytics_process_all() {
+    global $DB;
+
+    $users = $DB->get_records('user', ['deleted' => 0]);
+
+    foreach ($users as $u) {
+        if ($u->id <= 2) continue; // ignora admin/guest
+
+        list($access, $posts, $subs, $avg) =
+            local_studentanalytics_collect_data_for_user($u->id);
+
+        local_studentanalytics_save_metrics($u->id, $access, $posts, $subs, $avg);
+    }
+}
+
+/**
+ * Lê CSV como fallback (opção C).
+ */
+function local_studentanalytics_read_csv_fallback() {
+    $csvDir = __DIR__ . '/upload/';
+    $csvFiles = glob($csvDir . "*.csv");
+    $latestCsv = !empty($csvFiles) ? end($csvFiles) : null;
+
+    if (!$latestCsv) { return []; }
+
+    $students = [];
+
+    if (($handle = fopen($latestCsv, "r")) !== false) {
+
+        $firstLine = fgets($handle);
+        $sep = strpos($firstLine, ";") !== false ? ";" : ",";
+        rewind($handle);
+
+        $header = fgetcsv($handle, 0, $sep);
+
+        while (($row = fgetcsv($handle, 0, $sep)) !== false) {
+            if (count($row) !== count($header)) continue;
+
+            $a = array_combine($header, $row);
+
+            $obj = (object)[
+                'userid' => intval($a['student_id'] ?? 0),
+                'firstname' => $a['firstname'] ?? '',
+                'lastname' => $a['lastname'] ?? '',
+                'total_access' => intval($a['total_access'] ?? 0),
+                'forum_posts' => intval($a['forum_posts'] ?? 0),
+                'assignments_submitted' => intval($a['assignments_submitted'] ?? 0),
+                'average_grade' => floatval($a['average_grade'] ?? 0),
+            ];
+
+            $students[] = $obj;
+        }
+
+        fclose($handle);
+    }
+
+    return $students;
+}
+
+function local_studentanalytics_before_http_headers() {
+    global $PAGE;
+
+    // Garante que o CSS carregue em todas as páginas do plugin
+    if (strpos($PAGE->url, '/local/studentanalytics') !== false) {
+        $PAGE->requires->css('/local/studentanalytics/style.css');
+    }
 }
